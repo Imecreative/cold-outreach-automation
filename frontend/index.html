@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cold Outreach - Email Automation</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">
+                    <span class="logo-icon">📧</span>
+                    Cold Outreach
+                </h1>
+                <div class="header-stats" id="headerStats">
+                    <span class="stat">
+                        <span class="stat-value" id="totalLeads">0</span>
+                        <span class="stat-label">Leads</span>
+                    </span>
+                    <span class="stat">
+                        <span class="stat-value" id="emailsToday">0</span>
+                        <span class="stat-label">Sent Today</span>
+                    </span>
+                    <span class="stat">
+                        <span class="stat-value" id="quotaRemaining">50</span>
+                        <span class="stat-label">Remaining</span>
+                    </span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Upload Section - Shown when no file loaded -->
+            <section class="upload-section" id="uploadSection">
+                <div class="upload-card">
+                    <div class="upload-icon">📊</div>
+                    <h2>Upload Your Leads</h2>
+                    <p>Upload an Excel file (.xlsx) with your leads to get started.</p>
+                    <p class="upload-hint">Required columns: name, email. Optional: website, category, city</p>
+                    <div class="upload-zone" id="uploadZone">
+                        <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+                        <span>Drop Excel file here or click to browse</span>
+                    </div>
+                    <div class="upload-progress" id="uploadProgress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <span id="uploadStatus">Uploading...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dashboard Section - Shown when file loaded -->
+            <section class="dashboard-section" id="dashboardSection" style="display: none;">
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-card-icon valid">✓</div>
+                        <div class="stat-card-info">
+                            <span class="stat-card-value" id="validCount">0</span>
+                            <span class="stat-card-label">Valid Emails</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon invalid">✗</div>
+                        <div class="stat-card-info">
+                            <span class="stat-card-value" id="invalidCount">0</span>
+                            <span class="stat-card-label">Invalid Emails</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon scanned">🔍</div>
+                        <div class="stat-card-info">
+                            <span class="stat-card-value" id="scannedCount">0</span>
+                            <span class="stat-card-label">Sites Scanned</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card-icon sent">📤</div>
+                        <div class="stat-card-info">
+                            <span class="stat-card-value" id="sentCount">0</span>
+                            <span class="stat-card-label">Emails Sent</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Toolbar -->
+                <div class="toolbar">
+                    <div class="toolbar-left">
+                        <button class="btn btn-primary" id="btnVerifyAll">
+                            <span class="btn-icon">✓</span> Verify All
+                        </button>
+                        <button class="btn btn-primary" id="btnScanAll">
+                            <span class="btn-icon">🔍</span> Scan All
+                        </button>
+                        <button class="btn btn-primary" id="btnGenerateDrafts">
+                            <span class="btn-icon">✍️</span> Generate Drafts
+                        </button>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn btn-secondary" id="btnUploadNew">
+                            <span class="btn-icon">📤</span> New File
+                        </button>
+                        <button class="btn btn-secondary" id="btnDownload">
+                            <span class="btn-icon">📥</span> Download Excel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Progress Bar (shown during operations) -->
+                <div class="operation-progress" id="operationProgress" style="display: none;">
+                    <div class="progress-header">
+                        <span id="operationName">Verifying emails...</span>
+                        <span id="operationCount">0/0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="operationFill"></div>
+                    </div>
+                    <span class="progress-current" id="operationCurrent"></span>
+                </div>
+
+                <!-- Filters -->
+                <div class="filters">
+                    <div class="filter-group">
+                        <label>Verification Status</label>
+                        <select id="filterVerified">
+                            <option value="">All</option>
+                            <option value="valid">Valid</option>
+                            <option value="invalid">Invalid</option>
+                            <option value="unknown">Unknown</option>
+                            <option value="pending">Pending</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Draft Status</label>
+                        <select id="filterDraft">
+                            <option value="">All</option>
+                            <option value="true">Has Draft</option>
+                            <option value="false">No Draft</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Sent Status</label>
+                        <select id="filterSent">
+                            <option value="">All</option>
+                            <option value="not_sent">Not Sent</option>
+                            <option value="initial_sent">Initial Sent</option>
+                            <option value="ghost_1_sent">Follow-up 1</option>
+                            <option value="ghost_2_sent">Follow-up 2</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Per Page</label>
+                        <select id="pageSize">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                    <div class="filter-group search">
+                        <label>Search</label>
+                        <input type="text" id="searchInput" placeholder="Search name, email, website...">
+                    </div>
+                </div>
+
+                <!-- Leads Table -->
+                <div class="table-container">
+                    <table class="leads-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Website</th>
+                                <th>Verified</th>
+                                <th>Scan</th>
+                                <th>Draft</th>
+                                <th>Sent</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leadsTableBody">
+                            <!-- Leads will be populated here -->
+                        </tbody>
+                    </table>
+                    <div class="table-empty" id="tableEmpty" style="display: none;">
+                        <p>No leads found. Try adjusting your filters or upload a new file.</p>
+                    </div>
+                    
+                    <!-- Pagination Controls -->
+                    <div class="pagination" id="paginationControls">
+                        <div class="pagination-info">
+                            <span id="paginationInfo">Showing 0-0 of 0 leads</span>
+                        </div>
+                        <div class="pagination-buttons">
+                            <button class="btn btn-sm btn-secondary" id="btnPrevPage" disabled>← Previous</button>
+                            <span class="page-indicator">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+                            <button class="btn btn-sm btn-secondary" id="btnNextPage" disabled>Next →</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Lead Detail Modal -->
+        <div class="modal" id="leadModal" style="display: none;">
+            <div class="modal-backdrop" id="modalBackdrop"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modalLeadName">Lead Details</h2>
+                    <button class="modal-close" id="modalClose">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-grid">
+                        <!-- Lead Info -->
+                        <div class="modal-section">
+                            <h3>Contact Info</h3>
+                            <div class="info-row">
+                                <span class="info-label">Email:</span>
+                                <span class="info-value" id="modalEmail">-</span>
+                                <span class="badge" id="modalVerified">pending</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Website:</span>
+                                <a href="#" class="info-link" id="modalWebsite" target="_blank">-</a>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Category:</span>
+                                <span class="info-value" id="modalCategory">-</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">City:</span>
+                                <span class="info-value" id="modalCity">-</span>
+                            </div>
+                        </div>
+
+                        <!-- Website Scan -->
+                        <div class="modal-section">
+                            <h3>Website Scan</h3>
+                            <div class="scan-summary" id="modalScanSummary">
+                                <span class="placeholder">Not scanned yet</span>
+                            </div>
+                            <button class="btn btn-sm" id="btnScanOne">
+                                <span class="btn-icon">🔍</span> Scan Now
+                            </button>
+                        </div>
+
+                        <!-- Notes -->
+                        <div class="modal-section full-width">
+                            <h3>My Notes</h3>
+                            <textarea id="modalNotes" placeholder="Add your notes about this lead..."></textarea>
+                        </div>
+
+                        <!-- Email Draft -->
+                        <div class="modal-section full-width">
+                            <div class="section-header">
+                                <h3>Email Draft</h3>
+                                <button class="btn btn-sm" id="btnGenerateOne">
+                                    <span class="btn-icon">✍️</span> Generate Draft
+                                </button>
+                            </div>
+                            <div class="draft-form">
+                                <div class="form-group">
+                                    <label>Subject</label>
+                                    <input type="text" id="modalSubject" placeholder="Email subject...">
+                                </div>
+                                <div class="form-group">
+                                    <label>Body</label>
+                                    <textarea id="modalBody" rows="10" placeholder="Email body..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Their Reply (for responses) -->
+                        <div class="modal-section full-width" id="replySection">
+                            <h3>Their Reply</h3>
+                            <textarea id="modalTheirReply" placeholder="Paste their reply here to generate a response..."></textarea>
+                            <button class="btn btn-sm" id="btnGenerateReply">
+                                <span class="btn-icon">💬</span> Generate Reply
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <div class="modal-status">
+                        <span class="status-label">Status:</span>
+                        <span class="status-value" id="modalStatus">Not Sent</span>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnSave">Save Changes</button>
+                        <button class="btn btn-success" id="btnSend">
+                            <span class="btn-icon">📤</span> Send Email
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
