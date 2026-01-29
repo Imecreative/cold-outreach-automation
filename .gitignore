@@ -7,7 +7,6 @@ venv/
 .idea/
 .vscode/
 data/leads_*.xlsx
-Documentation/
 node_modules/
 .DS_Store
 __MACOSX/
