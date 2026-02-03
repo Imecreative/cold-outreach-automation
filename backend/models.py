@@ -57,6 +57,11 @@ class Lead(BaseModel):
     
     # Additional Excel columns (preserved)
     extra_data: dict = {}
+    
+    # Audit and enrichment fields
+    audit_score: Optional[int] = None  # 0-100 score from website audit
+    audit_report_path: Optional[str] = None  # Path to detailed JSON report
+    decision_makers: Optional[List[str]] = None  # All found decision maker names
 
 
 class LeadUpdate(BaseModel):
@@ -94,6 +99,7 @@ class WebsiteScanResult(BaseModel):
     has_viewport_meta: bool = False
     audit_data: Optional[dict] = None
     summary: str
+    audit_report_paths: Optional[dict] = None  # Paths to generated audit reports (JSON, PDF)
 
 
 class EmailDraft(BaseModel):

@@ -5,13 +5,22 @@ Action routes for verification, scanning, drafting, and sending.
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Optional, List
 from datetime import datetime
+import json
+from pathlib import Path
 
 from ..models import BulkActionRequest, EmailVerificationStatus, SequenceStep
 from ..modules.excel_handler import get_handler
-from ..modules.smtp_verifier import verify_email
+from ..modules.smtp_verifier import verify_email, smart_verify_email
 from ..modules.website_scanner import scan_website
 from ..modules.ai_drafter import generate_initial_draft, generate_followup_draft, generate_reply_draft
 from ..modules.gmail_sender import send_email, get_remaining_daily_quota
+from ..modules.scheduler import email_scheduler
+from ..modules.time_utils import get_next_send_time
+from ..config import (
+    EMAIL_VERIFICATION_STRATEGY,
+    HUNTER_API_KEY,    KICKBOX_API_KEY,
+    ABSTRACT_API_KEY
+)
 
 
 router = APIRouter(prefix="/api", tags=["actions"])
@@ -27,6 +36,44 @@ _operation_progress = {
 
 def get_progress(operation: str) -> dict:
     return _operation_progress.get(operation, {})
+
+
+def _calculate_audit_score(tech: dict, content: dict) -> int:
+    """Calculate overall audit score from technical and content data."""
+    # SEO Score (0-100)
+    seo_score = 0
+    if tech.get('title'):
+        seo_score += 20
+    if tech.get('meta_description'):
+        seo_score += 20
+    if tech.get('h1'):
+        seo_score += 15
+    if tech.get('has_viewport_meta'):
+        seo_score += 25
+    if tech.get('ssl_enabled'):
+        seo_score += 10
+    if tech.get('has_structured_data'):
+        seo_score += 10
+    
+    # Content Score (0-100)
+    content_score = 0
+    max_per_item = 100 // 6  # 6 key content elements
+    if content.get('has_projects'):
+        content_score += max_per_item
+    if content.get('has_testimonials'):
+        content_score += max_per_item
+    if content.get('has_license'):
+        content_score += max_per_item
+    if content.get('has_about'):
+        content_score += max_per_item
+    if content.get('has_services'):
+        content_score += max_per_item
+    if content.get('has_social_links'):
+        content_score += max_per_item
+    
+    # Overall score (average of both)
+    overall_score = int((seo_score + min(content_score, 100)) / 2)
+    return overall_score
 
 
 @router.get("/progress/{operation}")
@@ -85,7 +132,14 @@ async def verify_emails(request: BulkActionRequest, background_tasks: Background
                 if lead.email in verification_cache:
                     result_status = verification_cache[lead.email]
                 else:
-                    result = await verify_email(lead.email)
+                    # Use smart verification with configured providers
+                    result = await smart_verify_email(
+                        lead.email,
+                        strategy=EMAIL_VERIFICATION_STRATEGY,
+                        hunter_api_key=HUNTER_API_KEY if HUNTER_API_KEY else None,
+                        kickbox_api_key=KICKBOX_API_KEY if KICKBOX_API_KEY else None,
+                        abstract_api_key=ABSTRACT_API_KEY if ABSTRACT_API_KEY else None
+                    )
                     result_status = result.status
                     verification_cache[lead.email] = result_status
                     # Small delay to avoid hitting rate limits
@@ -160,14 +214,68 @@ async def scan_websites(request: BulkActionRequest, background_tasks: Background
             
             try:
                 result = await scan_website(lead.website)
-                handler.update_lead(lead.id, {
+                
+                # Extract decision makers
+                decision_makers = result.audit_data.get('decision_makers', []) if result.audit_data else []
+                
+                # Select primary owner name from decision makers
+                owner_name = None
+                decision_maker_names = []
+                if decision_makers:
+                    # Sort by confidence (already done in scanner, but ensure it)
+                    sorted_makers = sorted(decision_makers, key=lambda x: x.get('confidence', 0), reverse=True)
+                    if sorted_makers:
+                        owner_name = sorted_makers[0]['name']
+                    decision_maker_names = [dm['name'] for dm in sorted_makers[:5]]
+                
+                # Calculate audit score from audit data
+                audit_score = None
+                if result.audit_data:
+                    tech = result.audit_data.get('technical', {})
+                    content = result.audit_data.get('content', {})
+                    audit_score = _calculate_audit_score(tech, content)
+                
+                # Get audit report paths
+                audit_report_path = None
+                if result.audit_report_paths:
+                    # Store JSON path as primary, but keep reference to PDF
+                    audit_report_path = result.audit_report_paths.get('json', '')
+                
+                # Update lead with enriched data
+                update_data = {
                     "website_scan_summary": result.summary,
-                    "website_scan_at": datetime.now()
-                })
+                    "website_scan_at": datetime.now(),
+                }
+                
+                # Add owner name if found
+                if owner_name:
+                    update_data["owner_name"] = owner_name
+                
+                # Add audit score
+                if audit_score is not None:
+                    update_data["audit_score"] = audit_score
+                
+                # Add audit report path
+                if audit_report_path:
+                    update_data["audit_report_path"] = audit_report_path
+                
+                # Add decision makers list
+                if decision_maker_names:
+                    update_data["decision_makers"] = decision_maker_names
+                
+                handler.update_lead(lead.id, update_data)
+                
             except Exception as e:
                 _operation_progress["scan"]["errors"].append(f"{lead.website}: {str(e)}")
             
             _operation_progress["scan"]["completed"] += 1
+            
+            # Periodically save (every 5 scans)
+            if _operation_progress["scan"]["completed"] % 5 == 0:
+                try:
+                    handler.save()
+                except:
+                    pass
         
         # Save changes
         try:
@@ -201,10 +309,27 @@ async def generate_draft(lead_id: int, draft_type: str = "initial"):
     
     try:
         if draft_type == "initial":
+            # Try to load audit data if available
+            audit_data = None
+            if hasattr(lead, 'audit_report_path') and lead.audit_report_path:
+                try:
+                    audit_report_path = Path(lead.audit_report_path)
+                    if audit_report_path.exists():
+                        with open(audit_report_path, 'r', encoding='utf-8') as f:
+                            report = json.load(f)
+                            audit_data = {
+                                'technical': report.get('technical_seo', {}),
+                                'content': report.get('content_analysis', {}),
+                                'decision_makers': report.get('decision_makers', [])
+                            }
+                except Exception as e:
+                    print(f"Could not load audit data: {e}")
+            
             draft = generate_initial_draft(
                 lead, 
                 scan_summary=lead.website_scan_summary,
-                notes=lead.my_notes
+                notes=lead.my_notes,
+                audit_data=audit_data
             )
         elif draft_type == "followup":
             # Determine which followup number based on current sequence step
@@ -280,10 +405,27 @@ async def generate_drafts_bulk(request: BulkActionRequest, background_tasks: Bac
             _operation_progress["draft"]["current"] = lead.name or lead.email
             
             try:
+                # Try to load audit data if available
+                audit_data = None
+                if hasattr(lead, 'audit_report_path') and lead.audit_report_path:
+                    try:
+                        audit_report_path = Path(lead.audit_report_path)
+                        if audit_report_path.exists():
+                            with open(audit_report_path, 'r', encoding='utf-8') as f:
+                                report = json.load(f)
+                                audit_data = {
+                                    'technical': report.get('technical_seo', {}),
+                                    'content': report.get('content_analysis', {}),
+                                    'decision_makers': report.get('decision_makers', [])
+                                }
+                    except Exception as e:
+                        print(f"Could not load audit data for {lead.name}: {e}")
+                
                 draft = generate_initial_draft(
                     lead,
                     scan_summary=lead.website_scan_summary,
-                    notes=lead.my_notes
+                    notes=lead.my_notes,
+                    audit_data=audit_data
                 )
                 handler.update_lead(lead.id, {
                     "email_subject": draft.subject,
@@ -378,3 +520,94 @@ async def send_lead_email(
         "lead_id": lead_id,
         "sequence_step": new_step.value
     }
+
+
+from pydantic import BaseModel
+
+class ScheduleEmailRequest(BaseModel):
+    send_at: Optional[datetime] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.post("/leads/{lead_id}/schedule")
+async def schedule_email_endpoint(lead_id: int, request: Optional[ScheduleEmailRequest] = None):
+    """
+    Schedule an email for a lead.
+    If send_at is not provided, calculates optimal time based on timezone.
+    """
+    handler = get_handler()
+    if not handler:
+        raise HTTPException(status_code=404, detail="No Excel file loaded.")
+    
+    lead = handler.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail=f"Lead with ID {lead_id} not found")
+        
+    # Get parameters
+    req = request or ScheduleEmailRequest()
+    subject = req.subject or lead.email_subject
+    body = req.body or lead.email_draft
+    send_at = req.send_at
+    
+    if not subject or not body:
+         raise HTTPException(status_code=400, detail="No email draft. Generate a draft first or provide in request.")
+    
+    # Calculate time if needed
+    if not send_at:
+        send_at = get_next_send_time(lead.city)
+    
+    # If naive, assume server time (or default logic in scheduler)
+    # APScheduler handles naive datetimes as local time by default.
+
+    try:
+        job_id = email_scheduler.schedule_email(lead_id, subject, body, send_at)
+        
+        # Update lead
+        handler.update_lead(lead_id, {
+            "scheduled_at": send_at,
+            "email_subject": subject,
+            "email_draft": body
+        })
+        # Save happens in update_lead usually? No, explicit save needed in this codebase pattern
+        try:
+            handler.save()
+        except:
+            pass
+        
+        return {
+            "success": True,
+            "lead_id": lead_id,
+            "scheduled_at": send_at.isoformat(),
+            "job_id": job_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to schedule email: {str(e)}")
+
+
+@router.post("/leads/{lead_id}/cancel-schedule")
+async def cancel_schedule_endpoint(lead_id: int):
+    """Cancel a scheduled email."""
+    handler = get_handler()
+    if not handler:
+        raise HTTPException(status_code=404, detail="No Excel file loaded.")
+        
+    try:
+        success = email_scheduler.cancel_email(lead_id)
+        
+        # Always clear status even if job not found (might be out of sync)
+        try:
+            handler.update_lead(lead_id, {
+                "scheduled_at": None
+            })
+            handler.save()
+        except:
+            pass
+            
+        if success:
+             return {"success": True, "message": "Email schedule cancelled"}
+        else:
+            return {"success": True, "message": "Schedule cleared (job was not found)"}
+            
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=f"Failed to cancel schedule: {str(e)}")

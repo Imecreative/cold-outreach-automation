@@ -35,3 +35,17 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic")
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+# Email Verification Providers
+EMAIL_VERIFICATION_STRATEGY = os.getenv("EMAIL_VERIFICATION_STRATEGY", "smart")  # "smtp", "api", or "smart"
+TRUMAIL_ENABLED = os.getenv("TRUMAIL_ENABLED", "true").lower() == "true"
+HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
+KICKBOX_API_KEY = os.getenv("KICKBOX_API_KEY", "")
+ABSTRACT_API_KEY = os.getenv("ABSTRACT_API_KEY", "")
+
+# Scheduler Configuration
+SCHEDULER_PERSISTENCE_FILE = DATA_DIR / "scheduled_emails.json"
+DEFAULT_SEND_TIMEZONE = os.getenv("DEFAULT_SEND_TIMEZONE", "America/New_York")
+OPTIMAL_SEND_HOURS = [10, 14]  # 10 AM, 2 PM local time
+OPTIMAL_SEND_DAYS = [1, 2, 3]  # Tuesday, Wednesday, Thursday (0=Monday)
+

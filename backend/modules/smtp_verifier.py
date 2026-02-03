@@ -14,6 +14,13 @@ from email_validator import validate_email, EmailNotValidError, EmailUndeliverab
 
 from ..config import VERIFIER_DELAY_SECONDS, VERIFIER_FROM_EMAIL
 from ..models import EmailVerificationStatus, VerificationResult
+from .verification_providers import (
+    EmailVerificationProvider,
+    TrumailProvider,
+    HunterProvider,
+    KickboxProvider,
+    AbstractAPIProvider
+)
 
 
 # Thread pool for running blocking SMTP operations
@@ -180,3 +187,148 @@ def check_catch_all(domain: str, sample_size: int = 2) -> bool:
         time.sleep(1.0)
     
     return tried > 0 and valid_count == tried
+
+
+class SmartEmailVerifier:
+    """
+    Smart email verifier with multi-provider support and fallback logic.
+    """
+    
+    def __init__(
+        self,
+        strategy: str = "smart",
+        trumail_enabled: bool = True,
+        hunter_api_key: str = None,
+        kickbox_api_key: str = None,
+        abstract_api_key: str = None
+    ):
+        """
+        Initialize smart verifier with providers.
+        
+        Args:
+            strategy: "smtp", "api", or "smart" (tries SMTP first, then API)
+            trumail_enabled: Enable Trumail (no API key needed)
+            hunter_api_key: Hunter.io API key
+            kickbox_api_key: Kickbox API key
+            abstract_api_key: AbstractAPI key
+        """
+        self.strategy = strategy
+        self.providers = []
+        
+        # Add providers based on configuration
+        if trumail_enabled:
+            self.providers.append(TrumailProvider())
+        
+        if hunter_api_key:
+            self.providers.append(HunterProvider(hunter_api_key))
+        
+        if kickbox_api_key:
+            self.providers.append(KickboxProvider(kickbox_api_key))
+        
+        if abstract_api_key:
+            self.providers.append(AbstractAPIProvider(abstract_api_key))
+    
+    async def verify(self, email: str) -> VerificationResult:
+        """
+        Smart verification with fallback logic.
+        
+        Strategy:
+        1. If "smtp": Try SMTP only
+        2. If "api": Try all API providers in sequence
+        3. If "smart": Try SMTP first, if blocked/unknown, try APIs
+        """
+        if self.strategy == "smtp":
+            return await verify_email(email)
+        
+        elif self.strategy == "api":
+            return await self._verify_with_apis(email)
+        
+        else:  # smart
+            # Try SMTP first
+            smtp_result = await verify_email(email)
+            
+            # If SMTP gives a definitive answer, use it
+            if smtp_result.status in [EmailVerificationStatus.VALID, EmailVerificationStatus.INVALID]:
+                return smtp_result
+            
+            # If SMTP is blocked or uncertain, try APIs
+            if smtp_result.status == EmailVerificationStatus.UNKNOWN:
+                if "block" in smtp_result.message.lower() or "timeout" in smtp_result.message.lower():
+                    api_result = await self._verify_with_apis(email)
+                    # Prefer API result if it's more definitive
+                    if api_result.status != EmailVerificationStatus.UNKNOWN:
+                        return api_result
+            
+            # Try catch-all detection
+            if smtp_result.status == EmailVerificationStatus.VALID:
+                domain = email.split('@')[1]
+                is_catchall = check_catch_all(domain, sample_size=1)
+                if is_catchall:
+                    return VerificationResult(
+                        email=email,
+                        status=EmailVerificationStatus.CATCH_ALL,
+                        message="Detected as catch-all domain"
+                    )
+            
+            return smtp_result
+    
+    async def _verify_with_apis(self, email: str) -> VerificationResult:
+        """
+        Try all configured API providers in sequence.
+        Returns first definitive result.
+        """
+        if not self.providers:
+            return VerificationResult(
+                email=email,
+                status=EmailVerificationStatus.UNKNOWN,
+                message="No API providers configured"
+            )
+        
+        last_result = None
+        
+        for provider in self.providers:
+            try:
+                result = await provider.verify(email)
+                
+                # If we get a definitive answer (VALID or INVALID), return it
+                if result.status in [EmailVerificationStatus.VALID, EmailVerificationStatus.INVALID]:
+                    return result
+                
+                # Keep catch-all results as backup
+                if result.status == EmailVerificationStatus.CATCH_ALL:
+                    last_result = result
+                
+                # Otherwise continue to next provider
+            except Exception as e:
+                print(f"{provider.get_name()} verification failed: {e}")
+                continue
+        
+        # If no provider gave a definitive answer, return last result or unknown
+        if last_result:
+            return last_result
+        
+        return VerificationResult(
+            email=email,
+            status=EmailVerificationStatus.UNKNOWN,
+            message="All API providers returned unknown status"
+        )
+
+
+# Convenience function for smart verification
+async def smart_verify_email(
+    email: str,
+    strategy: str = "smart",
+    hunter_api_key: str = None,
+    kickbox_api_key: str = None,
+    abstract_api_key: str = None
+) -> VerificationResult:
+    """
+    Verify email using smart strategy with multi-provider support.
+    """
+    verifier = SmartEmailVerifier(
+        strategy=strategy,
+        hunter_api_key=hunter_api_key,
+        kickbox_api_key=kickbox_api_key,
+        abstract_api_key=abstract_api_key
+    )
+    return await verifier.verify(email)

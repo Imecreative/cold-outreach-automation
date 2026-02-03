@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .routes import files, leads, actions
 from .config import HOST, PORT, DATA_DIR
+from .modules.scheduler import email_scheduler
 
 # Create FastAPI app
 app = FastAPI(
@@ -17,6 +18,15 @@ app = FastAPI(
     description="System for managing cold email outreach with SMTP verification, website scanning, AI drafts, and Gmail sending.",
     version="1.0.0"
 )
+
+# Scheduler Lifecycle Events
+@app.on_event("startup")
+async def start_scheduler():
+    email_scheduler.start()
+
+@app.on_event("shutdown")
+async def shutdown_scheduler():
+    email_scheduler.shutdown()
 
 # CORS middleware for frontend
 app.add_middleware(

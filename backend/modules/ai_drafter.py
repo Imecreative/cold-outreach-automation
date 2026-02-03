@@ -4,7 +4,7 @@ Placeholder for AI-powered email draft generation.
 Ready for future integration with Claude/Anthropic APIs.
 """
 
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from ..models import Lead, EmailDraft
 
 
@@ -47,14 +47,23 @@ Best,
 [Your Name]"""
 
 
-def generate_initial_draft(lead: Lead, scan_summary: Optional[str] = None, notes: Optional[str] = None) -> EmailDraft:
+def generate_initial_draft(lead: Lead, scan_summary: Optional[str] = None, notes: Optional[str] = None, audit_data: Optional[Dict[str, Any]] = None) -> EmailDraft:
     """
-    Generate an initial cold email draft.
-    Currently returns a mock template-based draft.
+    Generate an initial cold email draft with personalized content based on audit data.
     
-    In the future, this will call an AI API to generate personalized content.
+    Args:
+        lead: Lead data
+        scan_summary: Website scan summary (deprecated, use audit_data)
+        notes: Manual notes
+        audit_data: Full audit data from website scan (preferred)
     """
+    # Extract dynamic variables
     owner_name = lead.owner_name or lead.name or "there"
+    first_name = owner_name.split()[0] if ' ' in owner_name else owner_name
+    company_name = lead.name or "your business"
+    city = lead.city or ""
+    category = lead.category or "contractor"
+    audit_score = lead.audit_score if hasattr(lead, 'audit_score') else None
     
     # Build company context
     if lead.category and lead.city:
@@ -66,44 +75,190 @@ def generate_initial_draft(lead: Lead, scan_summary: Optional[str] = None, notes
     else:
         company_context = "your business"
     
-    # Build personalized observations from scan and notes
-    observations = []
+    # Build personalized observations using audit data
+    observations = _extract_observations_from_audit(audit_data, scan_summary, audit_score)
     
-    if scan_summary:
-        # Parse scan summary for specific issues
-        scan_lower = scan_summary.lower()
-        if "slow" in scan_lower:
-            observations.append("Your site seems to load a bit slowly, which can turn away potential customers before they even see your work.")
-        if "no meta description" in scan_lower:
-            observations.append("The site could use some SEO improvements to help homeowners find you more easily on Google.")
-        if "not be mobile-friendly" in scan_lower:
-            observations.append("It looks like the site might not be fully optimized for mobile, which is where most homeowners browse these days.")
-        if "wordpress" in scan_lower.lower():
-            observations.append("I see you're using WordPress—great choice for flexibility, but it might need some performance tuning.")
-    
+    # Add manual notes if provided
     if notes:
-        observations.append(notes)
+        observations.insert(0, notes)
     
-    if not observations:
-        observations.append("A few tweaks to the layout and messaging could help showcase your expertise and build trust with potential clients.")
+    # Limit to top 3 most impactful observations
+    observations = observations[:3]
     
-    personalized_observations = "\n\n".join(f"• {obs}" for obs in observations[:3])
+    # Format observations
+    if observations:
+        personalized_observations = "\n\n".join(f"• {obs}" for obs in observations)
+    else:
+        personalized_observations = "• A few tweaks to the layout and messaging could help showcase your expertise and build trust with potential clients."
     
+    # Generate email body with dynamic variables
     body = INITIAL_EMAIL_TEMPLATE.format(
-        owner_name=owner_name.split()[0] if ' ' in owner_name else owner_name,
+        owner_name=first_name,
         company_context=company_context,
         personalized_observations=personalized_observations
     )
     
-    # Generate subject
-    if lead.city:
-        subject = f"Quick thought about your {lead.city} website"
-    elif lead.category:
-        subject = f"A quick idea for your {lead.category.lower()} website"
-    else:
-        subject = "Quick thought about your website"
+    # Generate personalized subject line
+    subject = _generate_subject_line(lead, audit_score)
     
     return EmailDraft(subject=subject, body=body)
+
+
+def _extract_observations_from_audit(audit_data: Optional[Dict[str, Any]], scan_summary: Optional[str], audit_score: Optional[int]) -> List[str]:
+    """
+    Extract specific, actionable observations from audit data.
+    Prioritizes high-impact issues.
+    """
+    observations = []
+    
+    if not audit_data:
+        # Fallback to parsing scan summary if audit data not available
+        if scan_summary:
+            return _parse_scan_summary(scan_summary)
+        return []
+    
+    tech = audit_data.get('technical', {})
+    content = audit_data.get('content', {})
+    
+    # High Priority: Mobile Responsiveness (60% of traffic)
+    if not tech.get('has_viewport_meta'):
+        observations.append(
+            "Your site isn't mobile-friendly. Since 60% of homeowners browse on their phones, "
+            "you're likely losing qualified leads before they even see your work."
+        )
+    
+    # High Priority: Missing License Info (trust factor)
+    if not content.get('has_license'):
+        observations.append(
+            "I noticed your licensing information isn't prominently displayed. "
+            "In my experience, homeowners specifically look for this when choosing contractors—it's a major trust factor."
+        )
+    
+    # High Priority: No SSL (security concern)
+    if tech.get('ssl_enabled') == False:
+        observations.append(
+            "Your site doesn't have an SSL certificate (https). Modern browsers flag this as 'Not Secure,' "
+            "which immediately puts homeowners on guard."
+        )
+    
+    # Medium Priority: Missing Portfolio/Projects
+    if not content.get('has_projects'):
+        observations.append(
+            "You don't have a portfolio showcasing your projects. Visual proof of quality work "
+            "is one of the most powerful tools for converting visitors into leads."
+        )
+    
+    # Medium Priority: No Testimonials
+    if not content.get('has_testimonials'):
+        observations.append(
+            "There are no customer testimonials or reviews visible on your site. "
+            "Social proof is critical—homeowners want to see that others trust you."
+        )
+    
+    # Medium Priority: SEO Issues
+    if not tech.get('title') or not tech.get('meta_description'):
+        observations.append(
+            "Your site is missing key SEO elements (title tags, meta descriptions). "
+            "This makes it much harder for homeowners to find you when searching for contractors in your area."
+        )
+    
+    # Low Priority: Platform-specific insights
+    platform = tech.get('platform', '')
+    if platform == 'WordPress':
+        if not tech.get('has_viewport_meta') or not content.get('has_projects'):
+            observations.append(
+                "I see you're on WordPress—great platform for flexibility. "
+                "With a few plugin updates and template tweaks, we could showcase your work much more effectively."
+            )
+    elif platform == 'Wix' or platform == 'Squarespace':
+        observations.append(
+            f"You're using {platform}, which is convenient but can be limiting for contractors. "
+            "There are some quick customizations that could help you stand out and rank better locally."
+        )
+    
+    # Add score-based observation if available
+    if audit_score is not None:
+        if audit_score < 60:
+            observations.insert(0, 
+                f"Your website scored {audit_score}/100 in my technical audit. "
+                "There are some quick wins that could dramatically improve how homeowners see your business online."
+            )
+        elif audit_score < 80:
+            observations.append(
+                f"Your site scored {audit_score}/100—not bad, but there's real opportunity to stand out from competitors "
+                "with a few strategic improvements."
+            )
+    
+    return observations
+
+
+def _parse_scan_summary(scan_summary: str) -> List[str]:
+    """
+    Fallback method: Parse scan summary for issues (legacy support).
+    """
+    observations = []
+    scan_lower = scan_summary.lower()
+    
+    if "not mobile responsive" in scan_lower or "no viewport" in scan_lower:
+        observations.append(
+            "Your site isn't mobile-friendly, which means you're losing 60% of potential customers "
+            "who browse on their phones."
+        )
+    
+    if "missing title" in scan_lower or "missing meta" in scan_lower:
+        observations.append(
+            "Your site is missing critical SEO elements. This makes it harder for homeowners "
+            "to find you when searching for contractors in your area."
+        )
+    
+    if "no projects" in scan_lower or "no portfolio" in scan_lower:
+        observations.append(
+            "I don't see a portfolio of your work. Visual proof is one of the most powerful "
+            "tools for converting visitors into paying customers."
+        )
+    
+    if "no testimonials" in scan_lower:
+        observations.append(
+            "You're missing customer testimonials. Homeowners want to see that others trust you "
+            "before they reach out."
+        )
+    
+    if "no ssl" in scan_lower:
+        observations.append(
+            "Your site doesn't have SSL (https), which browsers flag as 'Not Secure.' "
+            "This immediately puts homeowners on guard."
+        )
+    
+    if not observations:
+        observations.append(
+            "A few strategic improvements to your website could help you attract more qualified leads "
+            "and stand out from competitors."
+        )
+    
+    return observations
+
+
+def _generate_subject_line(lead: Lead, audit_score: Optional[int]) -> str:
+    """
+    Generate a personalized subject line using lead data and audit score.
+    """
+    city = lead.city
+    category = lead.category
+    
+    # Personalized subject lines based on available data
+    if audit_score and audit_score < 60:
+        if city:
+            return f"Quick wins for your {city} website"
+        return "I found some quick wins for your website"
+    
+    if city and category:
+        return f"Thought about your {category.lower()} site in {city}"
+    elif city:
+        return f"Quick idea for your {city} website"
+    elif category:
+        return f"Idea for your {category.lower()} website"
+    else:
+        return "Quick thought about your website"
 
 
 def generate_followup_draft(lead: Lead, followup_number: int = 1) -> EmailDraft:
